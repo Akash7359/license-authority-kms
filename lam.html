@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LAM – License Authority & KMS (RSA Based)</title>
+<style>
+    body {
+        font-family: Arial, Helvetica, sans-serif;
+        margin: 40px;
+        color: #1f2937;
+        line-height: 1.6;
+    }
+    h1 {
+        font-size: 28px;
+        border-bottom: 3px solid #111827;
+        padding-bottom: 8px;
+    }
+    h2 {
+        margin-top: 40px;
+        font-size: 22px;
+        border-bottom: 2px solid #9ca3af;
+        padding-bottom: 5px;
+    }
+    h3 {
+        margin-top: 25px;
+        font-size: 18px;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 15px;
+        font-size: 14px;
+    }
+    table, th, td {
+        border: 1px solid #9ca3af;
+    }
+    th {
+        background: #f3f4f6;
+    }
+    th, td {
+        padding: 8px;
+        text-align: left;
+    }
+    pre {
+        background: #0f172a;
+        color: #e5e7eb;
+        padding: 15px;
+        overflow-x: auto;
+        font-size: 13px;
+        border-radius: 6px;
+    }
+    ul {
+        margin-top: 10px;
+    }
+    hr {
+        margin: 40px 0;
+    }
+</style>
+</head>
+<body>
+
+<h1>TSD – License Authority & Key Management System (RSA Based)</h1>
+
+<!-- =============================== -->
+<h2>1. Document Control</h2>
+
+<table>
+<tr><th>Document Title</th><td>License Authority & KMS – Technical Specification</td></tr>
+<tr><th>Version</th><td>1.0</td></tr>
+<tr><th>Date</th><td>2026-01-14</td></tr>
+<tr><th>Prepared By</th><td>Akash Sonawane</td></tr>
+<tr><th>Reviewed By</th><td>Architecture Review Board</td></tr>
+<tr><th>Approved By</th><td>CTO / CISO</td></tr>
+</table>
+
+<h3>Change History</h3>
+<table>
+<tr>
+<th>Version</th>
+<th>Date</th>
+<th>Description of Change</th>
+<th>Author</th>
+</tr>
+<tr>
+<td>1.0</td>
+<td>2026-01-14</td>
+<td>Initial RSA-based License Authority & KMS design</td>
+<td>Akash Sonawane</td>
+</tr>
+</table>
+
+<!-- =============================== -->
+<h2>2. Purpose & Scope</h2>
+
+<h3>Purpose of the Document</h3>
+<p>
+This document defines the technical architecture, data flow, database design, and
+security controls for a centralized <b>License Authority & Key Management System (LAM-KMS)</b>
+using <b>RSA public/private key cryptography</b> for fintech microservices.
+</p>
+
+<h3>Scope of the System</h3>
+<ul>
+<li>License enforcement for backend microservices</li>
+<li>Daily RSA key rotation and distribution</li>
+<li>Kill switch and grace-period handling</li>
+</ul>
+
+<h3>In-Scope Components</h3>
+<ul>
+<li>License Authority Microservice</li>
+<li>RSA Key Management (Public/Private)</li>
+<li>Redis License Cache</li>
+<li>Project Microservices (Laravel)</li>
+</ul>
+
+<h3>Out-of-Scope Components</h3>
+<ul>
+<li>Customer authentication</li>
+<li>Transaction business logic</li>
+</ul>
+
+<h3>Assumptions & Dependencies</h3>
+<ul>
+<li>All service communication uses TLS 1.2+</li>
+<li>Redis is protected using ACL and AUTH</li>
+<li>Private RSA keys never leave LAM/KMS</li>
+</ul>
+
+<!-- =============================== -->
+<h2>3. References</h2>
+<ul>
+<li>Internal FRD – License Control Platform</li>
+<li>OWASP Cryptographic Storage Cheat Sheet</li>
+<li>RBI Cyber Security Framework</li>
+</ul>
+
+<!-- =============================== -->
+<h2>4. High-Level Overview</h2>
+
+<h3>High-Level Architecture</h3>
+<p>
+Client → API Gateway → Project Microservices → Redis → License Authority & KMS → Database
+</p>
+
+<!-- =============================== -->
+<h2>4.2 Data Flow Diagram (DFD)</h2>
+
+<h3>Level 0 DFD (Context Diagram)</h3>
+
+<pre>
++-------------------+        +---------------------------+
+|   Client / API    | -----> |   Project Microservice    |
++-------------------+        +---------------------------+
+                                      |
+                                      v
+                         +----------------------------------+
+                         |  License Authority & KMS (LAM)  |
+                         |   (TLS + RSA Key Management)    |
+                         +----------------------------------+
+</pre>
+
+<h3>Level 1 DFD (Detailed)</h3>
+
+<pre>
++-----------+      +------------------+      +----------------+
+|  Client   | ---> | Project Service  | ---> |  Redis Cache   |
++-----------+      +------------------+      +----------------+
+                          |      ^
+                          |      |
+        License Expired   |      |  Valid License
+                          v      |
+          +---------------------------------------------+
+          |     License Authority & KMS (LAM)           |
+          |     - mTLS Authentication                   |
+          |     - RSA Public/Private Key Management     |
+          |     - License Validation                    |
+          +---------------------------------------------+
+                          |
+                          v
+               +-----------------------------+
+               |   License / RSA Key DB      |
+               +-----------------------------+
+</pre>
+
+<!-- =============================== -->
+<h2>4.3 Flowchart – License Validation & Refresh</h2>
+
+<pre>
++----------------------------+
+|     Incoming API Request   |
++----------------------------+
+               |
+               v
++----------------------------+
+|     Check Redis License    |
++----------------------------+
+               |
+        +------+------+
+        |             |
+        v             v
++---------------+   +----------------------+
+|     Valid     |   |  Expired / Missing   |
++---------------+   +----------------------+
+        |                     |
+        v                     v
++------------------+   +--------------------------+
+| Process Request  |   |  Grace Period Valid ?    |
++------------------+   +--------------------------+
+                              |
+                      +-------+-------+
+                      |               |
+                      v               v
+        +------------------------+   +-----------------------+
+        | Allow + Async Renew    |   | Block Request         |
+        | (Non-blocking)         |   | (Kill Switch Active)  |
+        +------------------------+   +-----------------------+
+                      |
+                      v
+        +--------------------------------------+
+        | Call LAM/KMS (mTLS + RSA Validation) |
+        +--------------------------------------+
+                      |
+                      v
+        +------------------------------+
+        | Update Redis Cache           |
+        | - public_key                 |
+        | - key_version                |
+        | - expiry / grace window      |
+        +------------------------------+
+</pre>
+
+<!-- =============================== -->
+<h2>4.4 License Diagnostic & Tamper Detection Framework</h2>
+
+<h3>4.4.1 Objective</h3>
+<p>
+This section defines the diagnostic, integrity validation, and tamper detection mechanisms
+that ensure <b>License Authority & KMS (LAM)</b> maintains centralized control over all
+licensed microservices, even when deployed on <b>client-managed infrastructure</b>.
+</p>
+
+<ul>
+<li>Detect unauthorized code or configuration changes</li>
+<li>Prevent license bypass or replay attacks</li>
+<li>Ensure kill-switch authority remains with LAM</li>
+<li>Provide audit-grade forensic evidence</li>
+</ul>
+
+<!-- =============================== -->
+<h3>4.4.2 Diagnostic Control Principles</h3>
+
+<table>
+<tr>
+<th>Principle</th>
+<th>Description</th>
+</tr>
+<tr>
+<td>Centralized Authority</td>
+<td>LAM is the single source of truth for license validity</td>
+</tr>
+<tr>
+<td>Zero Trust Execution</td>
+<td>Microservices never self-assert license state</td>
+</tr>
+<tr>
+<td>Cryptographic Binding</td>
+<td>License is bound to service identity, code state, and host</td>
+</tr>
+<tr>
+<td>Time-Bound Trust</td>
+<td>All licenses expire and require revalidation</td>
+</tr>
+<tr>
+<td>Detect Over Prevent</td>
+<td>System prioritizes detection and controlled shutdown</td>
+</tr>
+</table>
+
+<!-- =============================== -->
+<h3>4.4.3 License Assertion Token (LAT)</h3>
+
+<p>
+LAM issues a <b>License Assertion Token (LAT)</b>, cryptographically signed using the
+LAM private RSA key. The LAT represents the authoritative license state.
+</p>
+
+<h4>LAT Properties</h4>
+<ul>
+<li>RSA signed (SHA-256)</li>
+<li>Short-lived and non-replayable</li>
+<li>Verifiable but non-modifiable by clients</li>
+</ul>
+
+<h4>LAT Payload Structure</h4>
+
+<pre>
+{
+  "project_id": "FINTECH_X",
+  "service_name": "payments-service",
+  "service_hash": "sha256_code_manifest",
+  "host_fingerprint": "hashed_machine_identity",
+  "key_version": "v7",
+  "issued_at": "2026-01-14T10:00:00Z",
+  "expires_at": "2026-01-15T10:00:00Z",
+  "license_status": "ACTIVE"
+}
+</pre>
+
+<p>
+Microservices can only <b>verify</b> the LAT using the public key fetched from LAM.
+</p>
+
+<!-- =============================== -->
+<h3>4.4.4 Runtime Code Integrity Diagnosis</h3>
+
+<p>
+Each microservice performs runtime integrity checks to detect unauthorized code changes.
+</p>
+
+<h4>Build-Time Manifest Generation</h4>
+
+<pre>
+sha256sum app/ bootstrap/ vendor/ > service.manifest
+</pre>
+
+<h4>Runtime Validation</h4>
+<ul>
+<li>Hash recalculated during startup and periodic intervals</li>
+<li>Compared against <b>service_hash</b> in LAT</li>
+<li>Mismatch indicates potential tampering</li>
+</ul>
+
+<table>
+<tr>
+<th>Integrity State</th>
+<th>Action</th>
+</tr>
+<tr>
+<td>Hash Match</td>
+<td>Normal request processing</td>
+</tr>
+<tr>
+<td>Temporary Mismatch</td>
+<td>Grace Mode + Alert to LAM</td>
+</tr>
+<tr>
+<td>Persistent Mismatch</td>
+<td>License revocation and kill switch activation</td>
+</tr>
+</table>
+
+<!-- =============================== -->
+<h3>4.4.5 Host Environment Fingerprinting</h3>
+
+<p>
+To prevent license reuse across unauthorized environments, each service derives a
+<b>host fingerprint</b>.
+</p>
+
+<h4>Fingerprint Inputs</h4>
+<ul>
+<li>CPU identifier</li>
+<li>Primary disk UUID</li>
+<li>MAC address</li>
+</ul>
+
+<p>
+The combined fingerprint is hashed and embedded in the LAT. Any mismatch invalidates
+the license.
+</p>
+
+<!-- =============================== -->
+<h3>4.4.6 Heartbeat & Behavioral Diagnosis</h3>
+
+<p>
+Each microservice periodically sends a diagnostic heartbeat to LAM.
+</p>
+
+<h4>Heartbeat Payload</h4>
+
+<pre>
+{
+  "service_name": "payments-service",
+  "lat_version": "v7",
+  "license_state": "ACTIVE",
+  "redis_hit_ratio": 98,
+  "failed_license_checks": 0,
+  "uptime_seconds": 86400
+}
+</pre>
+
+<h4>Behavioral Anomalies Detected</h4>
+<ul>
+<li>Missing or delayed heartbeats</li>
+<li>Repeated grace-mode activations</li>
+<li>Redis-only validation patterns</li>
+<li>License refresh suppression attempts</li>
+</ul>
+
+<!-- =============================== -->
+<h3>4.4.7 Redis Trust Degradation Model</h3>
+
+<p>
+Redis is treated strictly as a <b>performance cache</b>, not a trust source.
+</p>
+
+<ul>
+<li>All Redis license entries include RSA signatures</li>
+<li>Signature verified on every read</li>
+<li>Unsigned or invalid entries are ignored</li>
+</ul>
+
+<!-- =============================== -->
+<h3>4.4.8 Kill Switch Enforcement</h3>
+
+<p>
+The kill switch is <b>data-driven</b> and enforced through license state, not application code.
+</p>
+
+<h4>Kill Switch Triggers</h4>
+<ul>
+<li>License revoked</li>
+<li>Persistent integrity failure</li>
+<li>Project status set to SUSPENDED or REVOKED</li>
+</ul>
+
+<p>
+If enforcement logic is removed from code, LAT renewal fails, resulting in automatic
+service shutdown on the next validation cycle.
+</p>
+
+<!-- =============================== -->
+<h3>4.4.9 Forensic Audit & Evidence Collection</h3>
+
+<p>
+LAM maintains immutable audit logs for all diagnostic events.
+</p>
+
+<ul>
+<li>Code hash mismatches</li>
+<li>Heartbeat anomalies</li>
+<li>License issuance and revocation</li>
+<li>Key rotation history</li>
+</ul>
+
+<p>
+These logs provide regulatory, contractual, and legal evidence for compliance audits
+and client disputes.
+</p>
+
+<!-- =============================== -->
+<h3>4.4.10 Diagnostic Flow Summary</h3>
+
+<pre>
+Service Startup
+      |
+      v
+Verify LAT Signature
+      |
+      v
+Validate Code Hash & Host Fingerprint
+      |
+      v
+Check Redis (Signed Cache)
+      |
+      v
+Send Heartbeat to LAM
+      |
+      v
+LAM Decision → Allow | Grace | Kill Switch
+</pre>
+
+<!-- =============================== -->
+<h2>4.5 Diagnostic Implementation Guidelines for All Microservices</h2>
+
+<h3>4.5.1 Purpose</h3>
+<p>
+This section defines the <b>mandatory implementation steps</b> that every downstream
+microservice must follow to integrate with the <b>License Authority & KMS (LAM)</b>.
+These controls ensure that license enforcement, diagnostics, and kill-switch authority
+remain centralized and tamper-resistant.
+</p>
+
+<p>
+Non-compliance with any step in this section results in <b>automatic license invalidation</b>.
+</p>
+
+<hr>
+
+<h3>4.5.2 Mandatory Startup Diagnostic Sequence</h3>
+
+<p>
+Every microservice must execute the following sequence <b>before accepting traffic</b>:
+</p>
+
+<pre>
+1. Load service identity (project_id, service_name)
+2. Fetch active LAM public key via mTLS
+3. Load last known License Assertion Token (LAT)
+4. Verify LAT RSA signature
+5. Validate LAT expiry and key_version
+6. Compute runtime code hash
+7. Validate host fingerprint
+8. Load Redis cache (signed only)
+9. Register heartbeat scheduler
+</pre>
+
+<p>
+Failure at any step prevents the service from starting or forces immediate shutdown.
+</p>
+
+<hr>
+
+<h3>4.5.3 License Middleware Enforcement</h3>
+
+<p>
+All request handling layers must be protected by a centralized <b>License Middleware</b>.
+</p>
+
+<ul>
+<li>No controller, worker, job, or cron may bypass this middleware</li>
+<li>Middleware validates LAT state on every request</li>
+<li>Redis is consulted only after RSA verification</li>
+</ul>
+
+<p>
+If middleware is disabled or removed, LAT renewal fails and the service enters
+<b>kill-switch state</b>.
+</p>
+
+<hr>
+
+<h3>4.5.4 License Assertion Token (LAT) Verification Rules</h3>
+
+<p>
+Microservices are strictly limited to <b>verification-only</b> operations on LAT.
+</p>
+
+<ul>
+<li>LAT must be verified using the LAM public key</li>
+<li>project_id and service_name must match runtime identity</li>
+<li>key_version must be active</li>
+<li>expires_at must be in the future</li>
+</ul>
+
+<p>
+LAT modification, regeneration, or override is strictly forbidden.
+</p>
+
+<hr>
+
+<h3>4.5.5 Runtime Code Integrity Enforcement</h3>
+
+<p>
+Each microservice must continuously validate its own integrity.
+</p>
+
+<ul>
+<li>Build-time manifest hash is generated during CI/CD</li>
+<li>Runtime hash is computed at startup and at fixed intervals</li>
+<li>Hash is compared against <b>service_hash</b> inside LAT</li>
+</ul>
+
+<table>
+<tr><th>Condition</th><th>Result</th></tr>
+<tr><td>Hash match</td><td>Normal operation</td></tr>
+<tr><td>Single mismatch</td><td>Grace Mode + LAM alert</td></tr>
+<tr><td>Repeated mismatch</td><td>Immediate kill switch</td></tr>
+</table>
+
+<hr>
+
+<h3>4.5.6 Host Fingerprint Validation</h3>
+
+<p>
+Host fingerprint validation prevents license reuse across machines or containers.
+</p>
+
+<ul>
+<li>Fingerprint is derived from CPU ID, Disk UUID, and MAC</li>
+<li>Fingerprint hash must match LAT</li>
+<li>Any mismatch triggers immediate license revocation</li>
+</ul>
+
+<p>
+Container restarts are allowed only if fingerprint remains consistent.
+</p>
+
+<hr>
+
+<h3>4.5.7 Redis Usage & Trust Model</h3>
+
+<p>
+Redis is treated as a <b>non-authoritative cache</b>.
+</p>
+
+<ul>
+<li>All Redis entries must contain RSA signatures</li>
+<li>Signature is verified on every read</li>
+<li>Expired or unsigned entries are ignored</li>
+</ul>
+
+<p>
+Redis availability issues must never disable license validation logic.
+</p>
+
+<hr>
+
+<h3>4.5.8 Heartbeat Scheduler Implementation</h3>
+
+<p>
+Each microservice must run a background heartbeat scheduler.
+</p>
+
+<h4>Heartbeat Responsibilities</h4>
+<ul>
+<li>Report license state</li>
+<li>Report integrity status</li>
+<li>Report grace-mode usage</li>
+<li>Confirm Redis vs LAM validation ratio</li>
+</ul>
+
+<p>
+Missing or delayed heartbeats are treated as behavioral anomalies.
+</p>
+
+<hr>
+
+<h3>4.5.9 Grace Mode vs Kill Switch Enforcement</h3>
+
+<table>
+<tr>
+<th>Scenario</th>
+<th>Enforcement Action</th>
+</tr>
+<tr>
+<td>LAM temporary unavailability</td>
+<td>Grace Mode (time-bound)</td>
+</tr>
+<tr>
+<td>License expired</td>
+<td>Grace Mode + forced renewal</td>
+</tr>
+<tr>
+<td>Code integrity failure</td>
+<td>Immediate Kill Switch</td>
+</tr>
+<tr>
+<td>Host fingerprint mismatch</td>
+<td>Immediate Kill Switch</td>
+</tr>
+<tr>
+<td>License revoked</td>
+<td>Immediate Kill Switch</td>
+</tr>
+</table>
+
+<hr>
+
+<h3>4.5.10 Forbidden Developer Actions</h3>
+
+<ul>
+<li>Hardcoding license checks or flags</li>
+<li>Mocking LAM in production</li>
+<li>Bypassing license middleware</li>
+<li>Extending LAT expiry locally</li>
+<li>Suppressing heartbeat failures</li>
+<li>Disabling integrity checks</li>
+</ul>
+
+<p>
+Detection of any forbidden action results in permanent license revocation.
+</p>
+
+<hr>
+
+<h3>4.5.11 End-to-End Diagnostic Lifecycle</h3>
+
+<pre>
+Service Startup
+      |
+Verify LAT Signature
+      |
+Validate Code Hash & Host Fingerprint
+      |
+Intercept All Requests
+      |
+Send Periodic Heartbeat
+      |
+LAM Decision → Allow | Grace | Kill Switch
+</pre>
+
+
+<!-- =============================== -->
+<h2>5. Interface Specifications</h2>
+
+<h3>License Public Key API</h3>
+<table>
+<tr><th>API Name</th><td>Fetch Project Public Key</td></tr>
+<tr><th>Method</th><td>GET</td></tr>
+<tr><th>URL</th><td>/api/v1/license/public-key</td></tr>
+<tr><th>Authentication</th><td>mTLS</td></tr>
+<tr><th>Response</th><td>public_key, key_version, valid_till</td></tr>
+</table>
+
+<!-- =============================== -->
+<h2>6. Data Model & Database Specifications</h2>
+
+<h3>6.1 ER Diagram</h3>
+
+<pre>
++--------------------+
+|      Projects      |
++--------------------+
+| PK id              |
+| name               |
+| status             |
+| license_expiry     |
++--------------------+
+          |
+          | 1
+          |
+          | *
++---------------------------+
+|    Project_RSA_Keys       |
++---------------------------+
+| PK id                     |
+| FK project_id             |
+| public_key                |
+| encrypted_private_key     |
+| key_version               |
+| valid_from                |
+| valid_to                  |
+| is_active                 |
++---------------------------+
+
+          |
+          | 1
+          |
+          | *
++---------------------------+
+|  Project_Microservices    |
++---------------------------+
+| PK id                     |
+| FK project_id             |
+| service_name              |
+| is_allowed                |
++---------------------------+
+</pre>
+
+
+<!-- ================================================= -->
+<h3>6.2 Table Definitions</h3>
+
+<h3>projects</h3>
+<table>
+<tr>
+<th>Column Name</th><th>Data Type</th><th>PK/FK</th>
+<th>Nullable</th><th>Default</th><th>Description</th>
+</tr>
+<tr><td>id</td><td>BIGINT</td><td>PK</td><td>No</td><td>Auto</td><td>Unique project identifier</td></tr>
+<tr><td>name</td><td>VARCHAR(100)</td><td></td><td>No</td><td></td><td>Project name</td></tr>
+<tr><td>status</td><td>ENUM</td><td></td><td>No</td><td>ACTIVE</td><td>ACTIVE / SUSPENDED / REVOKED</td></tr>
+<tr><td>license_expiry</td><td>TIMESTAMP</td><td></td><td>No</td><td></td><td>License expiry datetime</td></tr>
+<tr><td>created_at</td><td>TIMESTAMP</td><td></td><td>No</td><td></td><td>Record creation time</td></tr>
+<tr><td>updated_at</td><td>TIMESTAMP</td><td></td><td>No</td><td></td><td>Record update time</td></tr>
+</table>
+
+<h3>project_keys</h3>
+<table>
+<tr>
+<th>Column Name</th><th>Data Type</th><th>PK/FK</th>
+<th>Nullable</th><th>Default</th><th>Description</th>
+</tr>
+<tr><td>id</td><td>BIGINT</td><td>PK</td><td>No</td><td>Auto</td><td>Key record ID</td></tr>
+<tr><td>project_id</td><td>BIGINT</td><td>FK</td><td>No</td><td></td><td>Reference to projects.id</td></tr>
+<tr><td>key_version</td><td>VARCHAR(10)</td><td></td><td>No</td><td></td><td>Version (v1, v2, v3)</td></tr>
+<tr><td>encrypted_key</td><td>TEXT</td><td></td><td>No</td><td></td><td>Encrypted RSA private key</td></tr>
+<tr><td>valid_from</td><td>TIMESTAMP</td><td></td><td>No</td><td></td><td>Key activation time</td></tr>
+<tr><td>valid_to</td><td>TIMESTAMP</td><td></td><td>Yes</td><td>NULL</td><td>Key expiry time</td></tr>
+<tr><td>is_active</td><td>BOOLEAN</td><td></td><td>No</td><td>FALSE</td><td>Active key flag</td></tr>
+</table>
+
+<h3>project_microservices</h3>
+<table>
+<tr>
+<th>Column Name</th><th>Data Type</th><th>PK/FK</th>
+<th>Nullable</th><th>Default</th><th>Description</th>
+</tr>
+<tr><td>id</td><td>BIGINT</td><td>PK</td><td>No</td><td>Auto</td><td>Record ID</td></tr>
+<tr><td>project_id</td><td>BIGINT</td><td>FK</td><td>No</td><td></td><td>Reference to projects.id</td></tr>
+<tr><td>service_name</td><td>VARCHAR(100)</td><td></td><td>No</td><td></td><td>Microservice name</td></tr>
+<tr><td>is_allowed</td><td>BOOLEAN</td><td></td><td>No</td><td>TRUE</td><td>Access allowed flag</td></tr>
+<tr><td>created_at</td><td>TIMESTAMP</td><td></td><td>No</td><td></td><td>Creation time</td></tr>
+<tr><td>updated_at</td><td>TIMESTAMP</td><td></td><td>No</td><td></td><td>Update time</td></tr>
+</table>
+
+
+<!-- =============================== -->
+<h2>7. Non-Functional Requirements</h2>
+
+<ul>
+<li><b>Performance:</b> Redis lookup &lt; 10ms</li>
+<li><b>Security:</b> RSA 2048+, TLS 1.2+</li>
+<li><b>Availability:</b> Zero-downtime key rotation</li>
+<li><b>Compliance:</b> RBI, PCI-DSS aligned</li>
+</ul>
+
+<!-- =============================== -->
+<h2>8. Exception & Error Handling</h2>
+
+<ul>
+<li>License expired → Grace Mode</li>
+<li>Project suspended → Immediate Kill Switch</li>
+<li>LAM unavailable → Cached key usage</li>
+</ul>
+
+<!-- =============================== -->
+<h2>9. Deployment Specification</h2>
+
+<ul>
+<li>Dockerized Laravel services</li>
+<li>Separate environment secrets</li>
+<li>Rollback via Redis cache restore</li>
+</ul>
+
+<!-- =============================== -->
+<h2>10. Appendices</h2>
+
+<ul>
+<li>Glossary: LAM, KMS, RSA</li>
+<li>Postman Collection</li>
+<li>RBI Cyber Security References</li>
+</ul>
+
+</body>
+</html>
